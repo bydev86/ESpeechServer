@@ -148,6 +148,7 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 | `YTDLP_REMOTE_COMPONENTS` | **`ejs:github`** (YouTube only, when env unset) | yt-dlp **`--remote-components`** — downloads JS challenge solvers. Set to empty to disable. Override e.g. `ejs:npm` per [EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS). |
 | `YTDLP_EXTRACTOR_ARGS` | _(empty)_ | Override **`--extractor-args`** for yt-dlp (advanced). |
 | `SKIP_YOUTUBE_CAPTIONS` | _(unset)_ | If `true`, skip **`youtube-transcript-api`** caption fetch and use yt-dlp + STT immediately. |
+| `SKIP_YTDLP_FALLBACK` | _(unset)_ | If `true`, for **YouTube** only: when captions fail, **do not** call yt-dlp — return **422** `client_upload_required` + `next_step: upload_audio` (good for public sites that cannot rotate cookies). |
 | `YOUTUBE_TRANSCRIPT_LANGS` | `en,en-US,en-GB` | Preferred caption languages (comma-separated) for **`youtube-transcript-api`**. |
 
 ### Render (free Web Service)

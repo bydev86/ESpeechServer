@@ -579,6 +579,30 @@ def transcribe_url():
                         out[k] = v
                 return jsonify(out), 200
 
+        # Consumer-facing hosts: skip yt-dlp (cookies/bot wall) when captions failed — fail fast for UI upload path.
+        if (
+            video_id
+            and _is_youtube_url(url)
+            and os.environ.get("SKIP_YTDLP_FALLBACK", "").lower() in ("1", "true", "yes")
+        ):
+            return jsonify(
+                {
+                    "error": "client_upload_required",
+                    "youtube_video_id": video_id,
+                    "caption_attempt": {
+                        k: cap_meta[k]
+                        for k in ("caption_error", "caption_detail")
+                        if k in cap_meta and cap_meta[k]
+                    },
+                    "message": (
+                        "This server cannot download YouTube audio without captions. "
+                        "Use POST /uploadAudio with audio or video from the viewer's device "
+                        "(file pick, screen/tab recording, or exported clip)."
+                    ),
+                    "next_step": "upload_audio",
+                }
+            ), 422
+
         work_dir, media_path = _yt_dlp_download_best_audio(url)
         wav_path = _export_wav_for_google_(media_path, pydub_format=None)
         transcription = speech_to_text(wav_path)

@@ -95,6 +95,7 @@ Client
 | `MAX_URL_DOWNLOAD_MB` | yt-dlp max filesize. |
 | `SR_CHUNK_MS` / `SR_MAX_SINGLE_MS` / `SR_CHUNK_SLEEP_SEC` | Long-audio SR chunking. |
 | `SKIP_YOUTUBE_CAPTIONS` | Skip caption API; go straight to yt-dlp. |
+| `SKIP_YTDLP_FALLBACK` | If `true`: YouTube URLs **never** call yt-dlp after captions fail — **422** instructs client **`upload_audio`**. |
 | `YOUTUBE_TRANSCRIPT_LANGS` | Caption language preference list. |
 | `YTDLP_COOKIES_FILE` | Optional; auto `/etc/secrets/cookies.txt` on Render if present. |
 | `YTDLP_JS_RUNTIMES` | e.g. `node` — auto if `node` on PATH. |
@@ -118,7 +119,7 @@ Client
 | Issue | Mitigation |
 |-------|------------|
 | YouTube blocks server IP (captions or yt-dlp) | Tier 1: **browser blob → `/uploadAudio`** |
-| Cookies expire (yt-dlp only) | Refresh secret `cookies.txt`; irrelevant when `youtube_captions` succeeds |
+| Cookies expire (yt-dlp only) | Not sustainable for anonymous SaaS — prefer **`SKIP_YTDLP_FALLBACK=true`** + **`/uploadAudio`** for consumers; cookies only for private/admin deployments |
 | No JS runtime on server | Use **Dockerfile** with Node; `ejs:github` for challenge scripts |
 | Worker timeout | gunicorn `--timeout 900`; client `--max-time 900` |
 | Legal / ToS | User/content policy; backend README has disclaimer |
