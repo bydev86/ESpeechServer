@@ -117,7 +117,7 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 - **URL audio:** JSON `{ "url": "https://..." }` — **YouTube-only by default** (host allowlist); optional env for other hosts (see below).
 - **ffmpeg:** required on the server (pydub + yt-dlp).
 - **Render (free tier):** cold starts; live clients should use **≥ 60 s** timeout. **URL transcribes** need more wall time (download + decode + chunked SR): raise **gunicorn `--timeout`** (e.g. **300**) if you use `/transcribeUrl` in production.
-- **YouTube from cloud hosts:** Google often shows **“Sign in to confirm you’re not a bot”** for traffic from datacenter IPs. Many videos still work with yt-dlp’s alternate clients; **some IDs need a `cookies.txt`** — set **`YTDLP_COOKIES_FILE`** (see env table). If URL mode fails for a clip, fall back to downloading audio **in the browser/app** and **`POST /uploadAudio`**.
+- **YouTube from cloud hosts:** Google often shows **“Sign in to confirm you’re not a bot”** for traffic from datacenter IPs. Many videos work with yt-dlp’s alternate clients; stubborn IDs need a Netscape **`cookies.txt`**. On Render, add a secret file named **`cookies.txt`** — it mounts at **`/etc/secrets/cookies.txt`** and is picked up **automatically**. Optionally set **`YTDLP_COOKIES_FILE`** for a custom path. If URL mode still fails, use **`POST /uploadAudio`** from the client.
 
 ### Environment variables (optional)
 
