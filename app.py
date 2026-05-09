@@ -308,7 +308,7 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
     Returns (work_dir, media_path).
 
     YouTube often blocks datacenter IPs unless a non-web client is used; we try
-    android/ios/tv_embedded clients before falling back to defaults.
+    android/ios InnerTube variants before falling back to defaults.
     See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#youtube-sign-in-confirm-youre-not-a-bot
     """
     max_sec = int(os.environ.get("MAX_URL_AUDIO_SECONDS", "300"))
@@ -329,9 +329,11 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
         "-o",
         out_tmpl,
         "--retries",
-        "3",
+        "2",
         "--fragment-retries",
-        "3",
+        "2",
+        "--socket-timeout",
+        "30",
     ]
     cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
     if not cookies_file:
@@ -357,7 +359,6 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
             ["--extractor-args", "youtube:player_client=ios;player_skip=webpage"],
             ["--extractor-args", "youtube:player_client=android"],
             ["--extractor-args", "youtube:player_client=ios"],
-            ["--extractor-args", "youtube:player_client=tv_embedded"],
             [],
         ]
     )

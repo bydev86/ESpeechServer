@@ -116,7 +116,7 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 - **Live audio:** raw bytes or `multipart/form-data` with field `audio` (also `file`, `recording`, `upload`).
 - **URL audio:** JSON `{ "url": "https://..." }` — **YouTube-only by default** (host allowlist); optional env for other hosts (see below).
 - **ffmpeg:** required on the server (pydub + yt-dlp).
-- **Render (free tier):** cold starts; live clients should use **≥ 60 s** timeout. **URL transcribes** need more wall time (download + decode + chunked SR): raise **gunicorn `--timeout`** (e.g. **300**) if you use `/transcribeUrl` in production.
+- **Render (free tier):** cold starts; live clients should use **≥ 60 s** timeout. **`/transcribeUrl`** needs **much longer** wall time (yt-dlp + ffmpeg + chunked SR): use **`gunicorn --timeout 900`** (see `Procfile`). If the dashboard **Start Command** still uses **`300`**, you get **WORKER TIMEOUT** mid-download.
 - **YouTube from cloud hosts:** Google often shows **“Sign in to confirm you’re not a bot”** for traffic from datacenter IPs. Many videos work with yt-dlp’s alternate clients; stubborn IDs need a Netscape **`cookies.txt`**. On Render, add a secret file named **`cookies.txt`** — it mounts at **`/etc/secrets/cookies.txt`** and is picked up **automatically**. Optionally set **`YTDLP_COOKIES_FILE`** for a custom path. If URL mode still fails, use **`POST /uploadAudio`** from the client.
 
 ### Environment variables (optional)
@@ -139,8 +139,8 @@ Create a **Python** Web Service with the repo root as the application root. Use 
    `https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest`  
    If the build fails, put the ffmpeg buildpack **above** the Python buildpack or swap order per Render’s buildpack docs.
 2. **Build command:** `pip install -r requirements.txt`
-3. **Start command:** For **live uploads only**, `--timeout 120` is often enough. If you use **`/transcribeUrl`**, prefer e.g. **`--timeout 300`** (and keep **`--workers 1`** on free tier):  
-   `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 300`
+3. **Start command:** Must stay in sync with `Procfile` (or paste the same flags in the dashboard). **`--timeout 900`** gives `/transcribeUrl` room for yt-dlp + decode + chunked SR; if the dashboard still has **`300`**, workers die with **WORKER TIMEOUT**. Example:  
+   `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 900`
 
 The `Procfile` matches this start command for convenience.
 
