@@ -6,7 +6,7 @@
 
 ## ✨ Features
 
-- 🔊 Accepts raw audio data (`.wav`) via HTTP POST requests
+- 🔊 Accepts raw audio (`audio/wav`, `audio/webm`, etc.) or multipart uploads (`audio`, `file`, `recording`, `upload` fields)
 - 🧠 Uses Google Speech Recognition for high-accuracy transcription
 - ⚙️ Built with Flask and SpeechRecognition library
 - ☁️ Easily deployable on [Render](https://render.com/) or similar cloud platforms
@@ -45,7 +45,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The server will start at `http://0.0.0.0:8888`.
+The server listens on `0.0.0.0` using the **`PORT`** environment variable, or **8888** if unset (local dev).
 
 ---
 
@@ -59,16 +59,20 @@ POST /uploadAudio
 
 ### Description
 
-Uploads an audio file (in `.wav` format) and returns a JSON response with the transcribed text.
+Uploads audio and returns JSON with transcribed text. Non-audio errors use `{"error":"..."}`.
 
-### Request Headers
+Input is normalized with **pydub** to **mono, 16 kHz WAV** before Google Speech Recognition.
 
-- `Content-Type: audio/wav`
+### Request format
 
-### Example using `curl`
+- **Raw body**: set `Content-Type` appropriately (`audio/wav`, `audio/webm`, …). Magic-byte sniffing (RIFF/WAVE, WebM EBML, Ogg) is used when the body is recognizable.
+- **Multipart**: first non-empty file among fields `audio`, `file`, `recording`, `upload`.
+
+### Examples using `curl`
 
 ```bash
-curl -X POST http://localhost:8888/uploadAudio --data-binary "@yourfile.wav"
+curl -X POST http://localhost:8888/uploadAudio -H "Content-Type: audio/wav" --data-binary "@yourfile.wav"
+curl -X POST http://localhost:8888/uploadAudio -H "Content-Type: audio/webm" --data-binary "@clip.webm"
 ```
 
 ### Sample Response
@@ -81,14 +85,38 @@ curl -X POST http://localhost:8888/uploadAudio --data-binary "@yourfile.wav"
 
 ---
 
-## 🌐 Deployment on Render
+## 🌐 Deployment on Render (free Web Service)
 
-1. Create a new **Web Service** on [Render](https://render.com/).
-2. Link your GitHub repo.
-3. Set the environment:
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `gunicorn app:app`
-4. Deploy and you're done!
+Render’s free tier has **cold starts** (first request after sleep often **10–30+ seconds**), **512MB RAM**, and **no persistent disk** (only **`/tmp`** is writable). This app keeps temp audio under the default temp directory and uses **one Gunicorn worker** so transcoding stays within those limits.
+
+### FFmpeg (required for WebM / Opus)
+
+**pydub** shells out to **ffmpeg**. On Render’s Python runtime, add a secondary **buildpack** (order may matter; if the build fails, try ffmpeg **first**):
+
+- [jonathanong/heroku-buildpack-ffmpeg-latest](https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest)
+
+Use **`pip install -r requirements.txt`** as the build command (do not rely on `apt-get` unless you switch to a Docker deploy).
+
+### Commands
+
+- **Build Command**: `pip install -r requirements.txt`
+- **Start Command** (matches `Procfile`):  
+  `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120`  
+
+Use **`--workers 1`** on the free instance. Avoid **`--timeout 0`**; **120** is a reasonable upper bound for short speech blobs.
+
+### Smoke tests after deploy
+
+```bash
+curl -X POST "$SERVICE_URL/uploadAudio" -H "Content-Type: audio/wav" --data-binary "@small.wav"
+curl -X POST "$SERVICE_URL/uploadAudio" -H "Content-Type: audio/webm" --data-binary "@clip.webm"
+```
+
+From the browser on another origin: **OPTIONS** then **POST** should succeed without CORS blocking (`Access-Control-Allow-Origin` is set for `/uploadAudio`).
+
+### Clients (e.g. Nori)
+
+POST the raw blob with the correct `Content-Type`, or use multipart with one of the fields above. Use a **fetch timeout ≥ 60s** to tolerate cold starts on the free tier.
 
 ---
 
