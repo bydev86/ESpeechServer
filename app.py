@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 import traceback
 
@@ -47,6 +48,7 @@ def _pydub_format_from_content_type(ct):
         "video/mp4": "mp4",
         "audio/m4a": "m4a",
         "audio/x-m4a": "m4a",
+        "video/quicktime": "mov",
     }.get(ct)
 
 
@@ -74,8 +76,12 @@ def _suffix_for_format(fmt):
         return ".ogg"
     if fmt == "mp3":
         return ".mp3"
-    if fmt in ("m4a", "mp4"):
+    if fmt == "mp4":
+        return ".mp4"
+    if fmt == "m4a":
         return ".m4a"
+    if fmt == "mov":
+        return ".mov"
     if fmt == "wav":
         return ".wav"
     return ".bin"
@@ -98,7 +104,7 @@ def _read_upload_bytes_and_meta():
             pfmt = _pydub_format_from_content_type(f.mimetype or "")
             if not pfmt and f.filename:
                 ext = os.path.splitext(f.filename)[1].lower().lstrip(".")
-                if ext in ("webm", "wav", "ogg", "opus", "mp3", "m4a", "mp4"):
+                if ext in ("webm", "wav", "ogg", "opus", "mp3", "m4a", "mp4", "mov"):
                     pfmt = "ogg" if ext == "opus" else ext
             if not pfmt:
                 pfmt = _sniff_pydub_format(data)
@@ -108,20 +114,138 @@ def _read_upload_bytes_and_meta():
     return data, ct, pfmt
 
 
+def _decode_audio_segment(src_path, format_hint=None):
+    """
+    Load media with pydub/ffmpeg using several strategies (wrong MIME/extension happens often).
+    Larger probes help MP4/MOV where moov/metadata is late in the file.
+    """
+    _, ext = os.path.splitext(src_path)
+    ext = ext.lower()
+
+    attempts = []
+    seen = set()
+
+    def add_attempt(kwargs):
+        key = repr(kwargs)
+        if key not in seen:
+            seen.add(key)
+            attempts.append(kwargs)
+
+    meaningful_ext = ext in (
+        ".wav",
+        ".webm",
+        ".ogg",
+        ".opus",
+        ".mp3",
+        ".mp4",
+        ".m4a",
+        ".mov",
+    )
+    if meaningful_ext:
+        add_attempt({})
+    if format_hint:
+        add_attempt({"format": format_hint})
+
+    if format_hint in ("mp4", "m4a", "mov") or ext in (".mp4", ".m4a", ".mov"):
+        for fmt in ("mp4", "m4a", "mov"):
+            add_attempt({"format": fmt})
+
+    if format_hint == "webm" or ext == ".webm":
+        add_attempt({"format": "webm"})
+        add_attempt({"format": "matroska"})
+
+    if format_hint in ("ogg", "opus") or ext in (".ogg", ".opus"):
+        for fmt in ("ogg", "opus"):
+            add_attempt({"format": fmt})
+
+    if not attempts and format_hint:
+        add_attempt({"format": format_hint})
+    if not attempts:
+        add_attempt({})
+
+    heavy_params = ["-probesize", "100M", "-analyzeduration", "100M", "-fflags", "+genpts+discardcorrupt"]
+
+    last_err = None
+    for kwargs in attempts:
+        for extra in (None, heavy_params):
+            kw = dict(kwargs)
+            if extra:
+                kw["parameters"] = list(extra)
+            try:
+                return AudioSegment.from_file(src_path, **kw)
+            except Exception as e:
+                last_err = e
+                continue
+    if last_err:
+        raise last_err
+    raise RuntimeError("Unable to decode audio")
+
+
+def _ffmpeg_direct_wav(src_path, wav_path):
+    """Extract first audio stream to mono 16 kHz PCM WAV (handles many video containers)."""
+    ffmpeg_bin = os.environ.get("FFMPEG_BINARY", "ffmpeg")
+    cmd = [
+        ffmpeg_bin,
+        "-nostdin",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-probesize",
+        "100M",
+        "-analyzeduration",
+        "100M",
+        "-fflags",
+        "+genpts+discardcorrupt",
+        "-i",
+        src_path,
+        "-vn",
+        "-map_metadata",
+        "-1",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        wav_path,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "").strip() or "ffmpeg CLI decode failed"
+        raise RuntimeError(msg)
+
+
 def _export_wav_for_google_(src_path, pydub_format=None):
     """
-    Decode with pydub (ffmpeg), normalize to mono 16kHz WAV for SpeechRecognition.
+    Decode with pydub (ffmpeg), normalize to mono 16 kHz WAV for SpeechRecognition.
+    Falls back to ffmpeg CLI for stubborn MP4/MOV/screen captures.
     Returns path to a new temp .wav file.
     """
-    kwargs = {}
-    if pydub_format:
-        kwargs["format"] = pydub_format
-    audio = AudioSegment.from_file(src_path, **kwargs)
-    audio = audio.set_channels(1).set_frame_rate(16000)
+    pydub_err = None
+    try:
+        audio = _decode_audio_segment(src_path, format_hint=pydub_format)
+        audio = audio.set_channels(1).set_frame_rate(16000)
+        fd, wav_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        audio.export(wav_path, format="wav")
+        return wav_path
+    except Exception as e:
+        pydub_err = e
+
     fd, wav_path = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
-    audio.export(wav_path, format="wav")
-    return wav_path
+    try:
+        _ffmpeg_direct_wav(src_path, wav_path)
+        return wav_path
+    except Exception as ff_err:
+        try:
+            os.unlink(wav_path)
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"Decode failed (pydub/ffmpeg): {pydub_err}; CLI fallback: {ff_err}"
+        ) from ff_err
 
 
 def speech_to_text(wav_path):
