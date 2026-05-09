@@ -129,7 +129,7 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 | `SR_MAX_SINGLE_MS` | `55000` | Below this length, one SR request is used. |
 | `SR_CHUNK_SLEEP_SEC` | `0.25` | Pause between chunks to reduce rate-limit issues. |
 | `TRANSCRIBE_URL_EXTRA_HOSTS` | _(empty)_ | Comma-separated extra allowed hostnames (e.g. `vimeo.com`). |
-| `YTDLP_COOKIES_FILE` | _(auto)_ | Path to Netscape **`cookies.txt`** for yt-dlp. If unset but **`/etc/secrets/cookies.txt`** exists (Render default secret filename), it is used automatically. Override with this env when your secret uses another path/name. |
+| `YTDLP_COOKIES_FILE` | _(auto)_ | Path to Netscape **`cookies.txt`**. If unset but **`/etc/secrets/cookies.txt`** exists (Render secret filename), it is used automatically. The server **copies** it to `/tmp` before yt-dlp runs because secret files are **read-only** on Render (yt-dlp must be able to update its cookie jar on disk during the run). |
 
 ### Render (free Web Service)
 

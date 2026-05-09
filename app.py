@@ -302,6 +302,19 @@ def _is_youtube_url(url: str) -> bool:
     return h == "youtu.be" or h == "youtube.com" or h.endswith(".youtube.com")
 
 
+def _writable_cookies_copy_for_ytdlp(cookies_src: str | None) -> str | None:
+    """
+    yt-dlp calls save_cookies() on shutdown and opens the cookiejar for writing.
+    Render secret files under /etc/secrets are read-only — feed yt-dlp a /tmp copy.
+    """
+    if not cookies_src or not os.path.isfile(cookies_src):
+        return None
+    fd, tmp = tempfile.mkstemp(prefix="yt_cookies_", suffix=".txt")
+    os.close(fd)
+    shutil.copyfile(cookies_src, tmp)
+    return tmp
+
+
 def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
     """
     Download best audio with yt-dlp into a fresh temp directory.
@@ -317,87 +330,96 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
     work_dir = tempfile.mkdtemp(prefix="ytdl_")
     out_tmpl = os.path.join(work_dir, "src.%(ext)s")
 
-    base_cmd = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
-        "--no-playlist",
-        "-f",
-        "bestaudio/best",
-        "--max-filesize",
-        f"{max_mb}M",
-        "-o",
-        out_tmpl,
-        "--retries",
-        "2",
-        "--fragment-retries",
-        "2",
-        "--socket-timeout",
-        "30",
-    ]
-    cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
-    if not cookies_file:
-        # Render "Secret files" are mounted under /etc/secrets/<filename>
+    cookies_src = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
+    if not cookies_src:
         for candidate in ("/etc/secrets/cookies.txt", "/etc/secrets/yt_cookies.txt"):
             if os.path.isfile(candidate):
-                cookies_file = candidate
+                cookies_src = candidate
                 break
-    if cookies_file and os.path.isfile(cookies_file):
-        base_cmd.extend(["--cookies", cookies_file])
 
-    if max_sec > 0:
-        base_cmd.extend(["--download-sections", f"*0-{max_sec}"])
+    cookies_writable: str | None = None
+    try:
+        cookies_writable = _writable_cookies_copy_for_ytdlp(cookies_src or None)
 
-    override = os.environ.get("YTDLP_EXTRACTOR_ARGS", "").strip()
-    youtube_attempt_extras: list[list[str]] = []
-    if override:
-        youtube_attempt_extras.append(["--extractor-args", override])
-    # Skip fetching the browser-heavy webpage when possible (helps on cloud IPs).
-    youtube_attempt_extras.extend(
-        [
-            ["--extractor-args", "youtube:player_client=android;player_skip=webpage"],
-            ["--extractor-args", "youtube:player_client=ios;player_skip=webpage"],
-            ["--extractor-args", "youtube:player_client=android"],
-            ["--extractor-args", "youtube:player_client=ios"],
-            [],
+        base_cmd = [
+            sys.executable,
+            "-m",
+            "yt_dlp",
+            "--no-playlist",
+            "-f",
+            "bestaudio/best",
+            "--max-filesize",
+            f"{max_mb}M",
+            "-o",
+            out_tmpl,
+            "--retries",
+            "2",
+            "--fragment-retries",
+            "2",
+            "--socket-timeout",
+            "30",
         ]
-    )
+        if cookies_writable:
+            base_cmd.extend(["--cookies", cookies_writable])
 
-    attempts = youtube_attempt_extras if _is_youtube_url(url) else [[]]
+        if max_sec > 0:
+            base_cmd.extend(["--download-sections", f"*0-{max_sec}"])
 
-    last_msg = ""
-    for extras in attempts:
-        for fname in os.listdir(work_dir):
-            fp = os.path.join(work_dir, fname)
+        override = os.environ.get("YTDLP_EXTRACTOR_ARGS", "").strip()
+        youtube_attempt_extras: list[list[str]] = []
+        if override:
+            youtube_attempt_extras.append(["--extractor-args", override])
+        youtube_attempt_extras.extend(
+            [
+                ["--extractor-args", "youtube:player_client=android;player_skip=webpage"],
+                ["--extractor-args", "youtube:player_client=ios;player_skip=webpage"],
+                ["--extractor-args", "youtube:player_client=android"],
+                ["--extractor-args", "youtube:player_client=ios"],
+                [],
+            ]
+        )
+
+        attempts = youtube_attempt_extras if _is_youtube_url(url) else [[]]
+
+        last_msg = ""
+        for extras in attempts:
+            for fname in os.listdir(work_dir):
+                fp = os.path.join(work_dir, fname)
+                try:
+                    if os.path.isfile(fp):
+                        os.unlink(fp)
+                except OSError:
+                    pass
+
+            cmd = list(base_cmd)
+            cmd.extend(extras)
+            cmd.append(url)
+
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                last_msg = (proc.stderr or proc.stdout or "yt-dlp failed").strip()
+                continue
+
+            files = [
+                os.path.join(work_dir, f)
+                for f in os.listdir(work_dir)
+                if os.path.isfile(os.path.join(work_dir, f))
+            ]
+            if not files:
+                last_msg = "yt-dlp produced no file"
+                continue
+
+            media_path = max(files, key=os.path.getmtime)
+            return work_dir, media_path
+
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise RuntimeError((last_msg or "yt-dlp failed")[:8000])
+    finally:
+        if cookies_writable:
             try:
-                if os.path.isfile(fp):
-                    os.unlink(fp)
+                os.unlink(cookies_writable)
             except OSError:
                 pass
-
-        cmd = list(base_cmd)
-        cmd.extend(extras)
-        cmd.append(url)
-
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0:
-            last_msg = (proc.stderr or proc.stdout or "yt-dlp failed").strip()
-            continue
-
-        files = [
-            os.path.join(work_dir, f)
-            for f in os.listdir(work_dir)
-            if os.path.isfile(os.path.join(work_dir, f))
-        ]
-        if not files:
-            last_msg = "yt-dlp produced no file"
-            continue
-
-        media_path = max(files, key=os.path.getmtime)
-        return work_dir, media_path
-
-    shutil.rmtree(work_dir, ignore_errors=True)
-    raise RuntimeError((last_msg or "yt-dlp failed")[:8000])
 
 
 def _recognize_google_safe(recognizer, audio_data):
