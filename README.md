@@ -136,19 +136,40 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 
 ### Render (free Web Service)
 
-Create a **Python** Web Service with the repo root as the application root. Use **temp files only** (Python’s default temp dir is `/tmp` on Render); do **not** rely on persistent disk.
+Use **temp files only** (`/tmp`); do **not** rely on persistent disk.
 
-1. **Buildpacks:** Dashboard → **Settings** → **Buildpacks**  
-   - **`https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest`** (ffmpeg for pydub / merges).  
-   - **`https://github.com/heroku/heroku-buildpack-nodejs`** (recommended for **`/transcribeUrl`**) — provides **Node ≥20** for yt-dlp’s JS/EJS path.  
-   - Render’s **Python** buildpack (or native Python).  
-   **Order:** try **ffmpeg → node → python**; if the build fails, swap ffmpeg/node order per Render’s docs.  
-2. **Environment:** set **`NODE_VERSION=22`** (or **20**) when using the Node buildpack. For YouTube URL mode, also set **`YTDLP_JS_RUNTIMES=node`**.  
-3. **Build command:** `pip install -r requirements.txt`  
-4. **Start command:** Must stay in sync with `Procfile` (or paste the same flags in the dashboard). **`--timeout 900`** gives `/transcribeUrl` room for yt-dlp + decode + chunked SR; if the dashboard still has **`300`**, workers die with **WORKER TIMEOUT**. Example:  
-   `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 900`
+#### Why there’s often no “Buildpacks” button
 
-The `Procfile` matches this start command for convenience.
+If you created a **native Python 3** Web Service, Render usually **does not** show a Heroku-style **Buildpacks** list. Buildpacks are **not** part of the default Python quickstart flow.
+
+You still have two good options:
+
+---
+
+#### Option A — **Docker** (recommended for `/transcribeUrl`)
+
+This repo includes a **`Dockerfile`** that installs **Python**, **ffmpeg**, and **Node 22** (for yt-dlp’s JS/EJS path) and sets **`YTDLP_JS_RUNTIMES=node`**.
+
+1. Dashboard → your service → **Settings** → **Build & deploy**.  
+2. Set **Runtime** to **Docker** (or create **New → Web Service → Docker** and point at this repo).  
+3. Use default **Docker build** (Render builds from `Dockerfile` at the repo root).  
+4. **Start Command** can be left empty if the image **`CMD`** is used (the Dockerfile already runs gunicorn).  
+5. Keep **`cookies.txt`** as a secret file if YouTube still asks for login/bot checks.
+
+---
+
+#### Option B — **Native Python** (simpler, limited YouTube-by-URL)
+
+1. **Language:** Python 3  
+2. **Build command:** `pip install -r requirements.txt`  
+3. **Start command:**  
+   `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 900`  
+
+Native images often already include **ffmpeg** for tooling (see [Native runtimes](https://render.com/docs/native-environments)); you **won’t** get **Node** unless you switch to **Docker**, so **`YTDLP_JS_RUNTIMES`** won’t help until then. For stubborn YouTube URLs, use **`POST /uploadAudio`** from the client.
+
+---
+
+The **`Procfile`** matches the gunicorn line above for native Python deploys; Docker uses the **`Dockerfile` `CMD`** instead.
 
 ### Nori / browser client contract
 
