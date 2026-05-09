@@ -7,12 +7,18 @@
 ## ✨ Features
 
 - 🔊 **Live / mic:** `POST /uploadAudio` — raw or multipart (WebM, WAV, Ogg/Opus, MP3, M4A/MP4) with sniffing + CORS  
-- 🔗 **URL (YouTube default):** `POST /transcribeUrl` — JSON `{ "url": "..." }`; **yt-dlp** + same STT pipeline  
-- 🧠 Uses Google Speech Recognition for high-accuracy transcription
-- ⚙️ Built with Flask and SpeechRecognition library
-- ☁️ Easily deployable on [Render](https://render.com/) or similar cloud platforms
-- 🔁 Simple API endpoint for quick integration
-- 🎧 Ready to integrate with [ESpeech](https://github.com/yourusername/ESpeech) client libraries or custom ESP32 IoT devices
+- 🔗 **URL (YouTube default):** `POST /transcribeUrl` — tries **captions** first, then **yt-dlp** + STT  
+- 🧠 Uses Google Speech Recognition for high-accuracy transcription  
+- ⚙️ Built with Flask and SpeechRecognition library  
+- ☁️ Easily deployable on [Render](https://render.com/) or similar cloud platforms  
+- 🔁 Simple API endpoint for quick integration  
+- 🎧 Ready to integrate with [ESpeech](https://github.com/yourusername/ESpeech) client libraries or custom ESP32 IoT devices  
+
+---
+
+## 🤖 Agent & integration context
+
+For assistants working in **private repos** or without chat history: **`docs/AGENT_BRAIN.md`** (master context + specs + pitfalls) and **`docs/WORDPRESS_PLUGIN_AGENT_BRIEF.md`** (WordPress / Study Guide Quick Teaser integration).
 
 ---
 
@@ -22,6 +28,7 @@
 - **SpeechRecognition** – Python library for performing speech recognition  
 - **Pydub** – Audio handling made easy  
 - **yt-dlp** – Fetch audio from YouTube (and optional other hosts) by URL  
+- **youtube-transcript-api** – YouTube captions without a Data API key (caption-first URL path)  
 - **Gunicorn** – Production WSGI server for Python apps  
 
 ---
