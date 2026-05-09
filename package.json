@@ -1,0 +1,8 @@
+{
+  "name": "espeechserver",
+  "private": true,
+  "description": "Placeholder for Render/Heroku Node buildpack (yt-dlp JS runtime); no npm deps.",
+  "engines": {
+    "node": ">=20"
+  }
+}

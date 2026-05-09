@@ -362,6 +362,16 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
         if cookies_writable:
             base_cmd.extend(["--cookies", cookies_writable])
 
+        # YouTube EJS / PO-token paths often need a JS runtime (Node ≥20, Deno ≥2, …).
+        # On Render, add the Node buildpack and set YTDLP_JS_RUNTIMES=node — see README.
+        js_runtimes = os.environ.get("YTDLP_JS_RUNTIMES", "").strip()
+        if js_runtimes:
+            base_cmd.extend(["--js-runtimes", js_runtimes])
+
+        remote_components = os.environ.get("YTDLP_REMOTE_COMPONENTS", "").strip()
+        if remote_components:
+            base_cmd.extend(["--remote-components", remote_components])
+
         if max_sec > 0:
             base_cmd.extend(["--download-sections", f"*0-{max_sec}"])
 

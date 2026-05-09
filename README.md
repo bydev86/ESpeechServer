@@ -117,7 +117,7 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 - **URL audio:** JSON `{ "url": "https://..." }` — **YouTube-only by default** (host allowlist); optional env for other hosts (see below).
 - **ffmpeg:** required on the server (pydub + yt-dlp).
 - **Render (free tier):** cold starts; live clients should use **≥ 60 s** timeout. **`/transcribeUrl`** needs **much longer** wall time (yt-dlp + ffmpeg + chunked SR): use **`gunicorn --timeout 900`** (see `Procfile`). If the dashboard **Start Command** still uses **`300`**, you get **WORKER TIMEOUT** mid-download.
-- **YouTube from cloud hosts:** Google often shows **“Sign in to confirm you’re not a bot”** for traffic from datacenter IPs. Many videos work with yt-dlp’s alternate clients; stubborn IDs need a Netscape **`cookies.txt`**. On Render, add a secret file named **`cookies.txt`** — it mounts at **`/etc/secrets/cookies.txt`** and is picked up **automatically**. Optionally set **`YTDLP_COOKIES_FILE`** for a custom path. If URL mode still fails, use **`POST /uploadAudio`** from the client.
+- **YouTube from cloud hosts:** Datacenter IPs often hit **bot checks**. Use a **fresh** Netscape **`cookies.txt`** secret (`cookies.txt` → `/etc/secrets/cookies.txt`, copied to `/tmp` at runtime). For **“No supported JavaScript runtime”**, add **Node** on the server and set **`YTDLP_JS_RUNTIMES=node`** (see below). If URL mode still fails, use **`POST /uploadAudio`** from the client.
 
 ### Environment variables (optional)
 
@@ -130,16 +130,22 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 | `SR_CHUNK_SLEEP_SEC` | `0.25` | Pause between chunks to reduce rate-limit issues. |
 | `TRANSCRIBE_URL_EXTRA_HOSTS` | _(empty)_ | Comma-separated extra allowed hostnames (e.g. `vimeo.com`). |
 | `YTDLP_COOKIES_FILE` | _(auto)_ | Path to Netscape **`cookies.txt`**. If unset but **`/etc/secrets/cookies.txt`** exists (Render secret filename), it is used automatically. The server **copies** it to `/tmp` before yt-dlp runs because secret files are **read-only** on Render (yt-dlp must be able to update its cookie jar on disk during the run). |
+| `YTDLP_JS_RUNTIMES` | _(empty)_ | Passed to yt-dlp **`--js-runtimes`** (e.g. **`node`** after installing Node on the host). Needed for full YouTube support with recent yt-dlp; without it you may see **“No supported JavaScript runtime”**. |
+| `YTDLP_REMOTE_COMPONENTS` | _(empty)_ | Optional yt-dlp **`--remote-components`** value (see [EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS)). |
+| `YTDLP_EXTRACTOR_ARGS` | _(empty)_ | Override **`--extractor-args`** for yt-dlp (advanced). |
 
 ### Render (free Web Service)
 
 Create a **Python** Web Service with the repo root as the application root. Use **temp files only** (Python’s default temp dir is `/tmp` on Render); do **not** rely on persistent disk.
 
-1. **Buildpacks:** Dashboard → **Settings** → **Buildpacks** → add  
-   `https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest`  
-   If the build fails, put the ffmpeg buildpack **above** the Python buildpack or swap order per Render’s buildpack docs.
-2. **Build command:** `pip install -r requirements.txt`
-3. **Start command:** Must stay in sync with `Procfile` (or paste the same flags in the dashboard). **`--timeout 900`** gives `/transcribeUrl` room for yt-dlp + decode + chunked SR; if the dashboard still has **`300`**, workers die with **WORKER TIMEOUT**. Example:  
+1. **Buildpacks:** Dashboard → **Settings** → **Buildpacks**  
+   - **`https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest`** (ffmpeg for pydub / merges).  
+   - **`https://github.com/heroku/heroku-buildpack-nodejs`** (recommended for **`/transcribeUrl`**) — provides **Node ≥20** for yt-dlp’s JS/EJS path.  
+   - Render’s **Python** buildpack (or native Python).  
+   **Order:** try **ffmpeg → node → python**; if the build fails, swap ffmpeg/node order per Render’s docs.  
+2. **Environment:** set **`NODE_VERSION=22`** (or **20**) when using the Node buildpack. For YouTube URL mode, also set **`YTDLP_JS_RUNTIMES=node`**.  
+3. **Build command:** `pip install -r requirements.txt`  
+4. **Start command:** Must stay in sync with `Procfile` (or paste the same flags in the dashboard). **`--timeout 900`** gives `/transcribeUrl` room for yt-dlp + decode + chunked SR; if the dashboard still has **`300`**, workers die with **WORKER TIMEOUT**. Example:  
    `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 900`
 
 The `Procfile` matches this start command for convenience.
