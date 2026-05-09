@@ -117,6 +117,7 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 - **URL audio:** JSON `{ "url": "https://..." }` — **YouTube-only by default** (host allowlist); optional env for other hosts (see below).
 - **ffmpeg:** required on the server (pydub + yt-dlp).
 - **Render (free tier):** cold starts; live clients should use **≥ 60 s** timeout. **URL transcribes** need more wall time (download + decode + chunked SR): raise **gunicorn `--timeout`** (e.g. **300**) if you use `/transcribeUrl` in production.
+- **YouTube from cloud hosts:** Google often shows **“Sign in to confirm you’re not a bot”** for traffic from datacenter IPs. Many videos still work with yt-dlp’s alternate clients; **some IDs need a `cookies.txt`** — set **`YTDLP_COOKIES_FILE`** (see env table). If URL mode fails for a clip, fall back to downloading audio **in the browser/app** and **`POST /uploadAudio`**.
 
 ### Environment variables (optional)
 
@@ -128,7 +129,7 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 | `SR_MAX_SINGLE_MS` | `55000` | Below this length, one SR request is used. |
 | `SR_CHUNK_SLEEP_SEC` | `0.25` | Pause between chunks to reduce rate-limit issues. |
 | `TRANSCRIBE_URL_EXTRA_HOSTS` | _(empty)_ | Comma-separated extra allowed hostnames (e.g. `vimeo.com`). |
-| `TRANSCRIBE_URL_ANY_HOST` | _(unset)_ | If `true`, allow any `http(s)` URL (**SSRF risk** — only in trusted environments). |
+| `YTDLP_COOKIES_FILE` | _(empty)_ | Path to a Netscape-format **`cookies.txt`** for yt-dlp (often **required** on cloud IPs for some videos). On Render, use a [**secret file**](https://render.com/docs/configure-environment-variables#secret-files) and set this to its mount path. |
 
 ### Render (free Web Service)
 

@@ -14,6 +14,11 @@ import speech_recognition as sr
 app = Flask(__name__)
 
 
+@app.route("/")
+def root_health():
+    return jsonify({"ok": True, "service": "ESpeechServer"}), 200
+
+
 def _cors_headers(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
@@ -289,10 +294,22 @@ def _validate_transcribe_url(url: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _is_youtube_url(url: str) -> bool:
+    try:
+        h = (urlparse(url).hostname or "").lower().rstrip(".")
+    except Exception:
+        return False
+    return h == "youtu.be" or h == "youtube.com" or h.endswith(".youtube.com")
+
+
 def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
     """
     Download best audio with yt-dlp into a fresh temp directory.
     Returns (work_dir, media_path).
+
+    YouTube often blocks datacenter IPs unless a non-web client is used; we try
+    android/ios/tv_embedded clients before falling back to defaults.
+    See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#youtube-sign-in-confirm-youre-not-a-bot
     """
     max_sec = int(os.environ.get("MAX_URL_AUDIO_SECONDS", "300"))
     max_mb = int(os.environ.get("MAX_URL_DOWNLOAD_MB", "120"))
@@ -300,7 +317,7 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
     work_dir = tempfile.mkdtemp(prefix="ytdl_")
     out_tmpl = os.path.join(work_dir, "src.%(ext)s")
 
-    cmd = [
+    base_cmd = [
         sys.executable,
         "-m",
         "yt_dlp",
@@ -311,28 +328,69 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
         f"{max_mb}M",
         "-o",
         out_tmpl,
+        "--retries",
+        "3",
+        "--fragment-retries",
+        "3",
     ]
+    cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
+    if cookies_file and os.path.isfile(cookies_file):
+        base_cmd.extend(["--cookies", cookies_file])
+
     if max_sec > 0:
-        cmd.extend(["--download-sections", f"*0-{max_sec}"])
-    cmd.append(url)
+        base_cmd.extend(["--download-sections", f"*0-{max_sec}"])
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        msg = (proc.stderr or proc.stdout or "yt-dlp failed").strip()
-        raise RuntimeError(msg[:8000])
+    override = os.environ.get("YTDLP_EXTRACTOR_ARGS", "").strip()
+    youtube_attempt_extras: list[list[str]] = []
+    if override:
+        youtube_attempt_extras.append(["--extractor-args", override])
+    # Skip fetching the browser-heavy webpage when possible (helps on cloud IPs).
+    youtube_attempt_extras.extend(
+        [
+            ["--extractor-args", "youtube:player_client=android;player_skip=webpage"],
+            ["--extractor-args", "youtube:player_client=ios;player_skip=webpage"],
+            ["--extractor-args", "youtube:player_client=android"],
+            ["--extractor-args", "youtube:player_client=ios"],
+            ["--extractor-args", "youtube:player_client=tv_embedded"],
+            [],
+        ]
+    )
 
-    files = [
-        os.path.join(work_dir, f)
-        for f in os.listdir(work_dir)
-        if os.path.isfile(os.path.join(work_dir, f))
-    ]
-    if not files:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        raise RuntimeError("yt-dlp produced no file")
+    attempts = youtube_attempt_extras if _is_youtube_url(url) else [[]]
 
-    media_path = max(files, key=os.path.getmtime)
-    return work_dir, media_path
+    last_msg = ""
+    for extras in attempts:
+        for fname in os.listdir(work_dir):
+            fp = os.path.join(work_dir, fname)
+            try:
+                if os.path.isfile(fp):
+                    os.unlink(fp)
+            except OSError:
+                pass
+
+        cmd = list(base_cmd)
+        cmd.extend(extras)
+        cmd.append(url)
+
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            last_msg = (proc.stderr or proc.stdout or "yt-dlp failed").strip()
+            continue
+
+        files = [
+            os.path.join(work_dir, f)
+            for f in os.listdir(work_dir)
+            if os.path.isfile(os.path.join(work_dir, f))
+        ]
+        if not files:
+            last_msg = "yt-dlp produced no file"
+            continue
+
+        media_path = max(files, key=os.path.getmtime)
+        return work_dir, media_path
+
+    shutil.rmtree(work_dir, ignore_errors=True)
+    raise RuntimeError((last_msg or "yt-dlp failed")[:8000])
 
 
 def _recognize_google_safe(recognizer, audio_data):
