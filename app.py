@@ -44,6 +44,7 @@ def _pydub_format_from_content_type(ct):
         "audio/mpeg": "mp3",
         "audio/mp3": "mp3",
         "audio/mp4": "mp4",
+        "video/mp4": "mp4",
         "audio/m4a": "m4a",
         "audio/x-m4a": "m4a",
     }.get(ct)
@@ -58,6 +59,9 @@ def _sniff_pydub_format(data):
         return "ogg"
     if data[:4] == b"\x1a\x45\xdf\xa3":
         return "webm"
+    # ISO BMFF (MP4 / M4A / MOV) — typical for iPhone Voice Memos / AAC
+    if len(data) >= 8 and data[4:8] == b"ftyp":
+        return "mp4"
     if data[:3] == b"ID3" or (len(data) >= 2 and data[0:1] == b"\xff" and (data[1] & 0xE0) == 0xE0):
         return "mp3"
     return None
