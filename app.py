@@ -334,6 +334,12 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
         "3",
     ]
     cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "").strip()
+    if not cookies_file:
+        # Render "Secret files" are mounted under /etc/secrets/<filename>
+        for candidate in ("/etc/secrets/cookies.txt", "/etc/secrets/yt_cookies.txt"):
+            if os.path.isfile(candidate):
+                cookies_file = candidate
+                break
     if cookies_file and os.path.isfile(cookies_file):
         base_cmd.extend(["--cookies", cookies_file])
 
