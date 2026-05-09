@@ -79,6 +79,13 @@ Audio is decoded with **pydub**/**ffmpeg**, normalized to **mono 16 kHz WAV**, t
 
 Optional alternate key: `"video_url"`.
 
+**YouTube:** the server first tries **existing captions/subtitles** (manual or auto-generated) using **`youtube-transcript-api`** — **no Google Cloud API key** and **no cookies** for that step. If captions are missing or YouTube **blocks the server IP**, it falls back to **yt-dlp + speech-to-text** (heavier; may need cookies / Docker + Node — see Deployment).
+
+JSON **`source`** field on success:
+
+- **`youtube_captions`** — text from subtitle tracks (`caption_language_code`, `caption_generated`, … when present).
+- **`youtube_audio_stt`** — caption path failed or unavailable; audio was transcribed with Google SR. May include **`caption_fallback_reason`** (e.g. `IpBlocked`, `NoTranscriptFound`).
+
 ### Example using `curl`
 
 Live upload:
@@ -130,9 +137,11 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 | `SR_CHUNK_SLEEP_SEC` | `0.25` | Pause between chunks to reduce rate-limit issues. |
 | `TRANSCRIBE_URL_EXTRA_HOSTS` | _(empty)_ | Comma-separated extra allowed hostnames (e.g. `vimeo.com`). |
 | `YTDLP_COOKIES_FILE` | _(auto)_ | Path to Netscape **`cookies.txt`**. If unset but **`/etc/secrets/cookies.txt`** exists (Render secret filename), it is used automatically. The server **copies** it to `/tmp` before yt-dlp runs because secret files are **read-only** on Render (yt-dlp must be able to update its cookie jar on disk during the run). |
-| `YTDLP_JS_RUNTIMES` | _(empty)_ | Passed to yt-dlp **`--js-runtimes`** (e.g. **`node`** after installing Node on the host). Needed for full YouTube support with recent yt-dlp; without it you may see **“No supported JavaScript runtime”**. |
+| `YTDLP_JS_RUNTIMES` | **`node`** if `node` is on `PATH` | yt-dlp **`--js-runtimes`**. Override explicitly when needed (e.g. Docker sets `node`). |
 | `YTDLP_REMOTE_COMPONENTS` | **`ejs:github`** (YouTube only, when env unset) | yt-dlp **`--remote-components`** — downloads JS challenge solvers. Set to empty to disable. Override e.g. `ejs:npm` per [EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS). |
 | `YTDLP_EXTRACTOR_ARGS` | _(empty)_ | Override **`--extractor-args`** for yt-dlp (advanced). |
+| `SKIP_YOUTUBE_CAPTIONS` | _(unset)_ | If `true`, skip **`youtube-transcript-api`** caption fetch and use yt-dlp + STT immediately. |
+| `YOUTUBE_TRANSCRIPT_LANGS` | `en,en-US,en-GB` | Preferred caption languages (comma-separated) for **`youtube-transcript-api`**. |
 
 ### Render (free Web Service)
 

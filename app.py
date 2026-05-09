@@ -5,7 +5,7 @@ import sys
 import tempfile
 import time
 import traceback
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from flask import Flask, jsonify, request
 from pydub import AudioSegment
@@ -302,6 +302,55 @@ def _is_youtube_url(url: str) -> bool:
     return h == "youtu.be" or h == "youtube.com" or h.endswith(".youtube.com")
 
 
+def _youtube_video_id_from_url(url: str) -> str | None:
+    """Extract 11-char video id from common YouTube URL shapes."""
+    try:
+        parsed = urlparse((url or "").strip())
+    except Exception:
+        return None
+    host = (parsed.hostname or "").lower().rstrip(".")
+    parts = [p for p in parsed.path.split("/") if p]
+
+    if host == "youtu.be" and parts:
+        vid = parts[0].split("?")[0]
+        return vid if len(vid) >= 6 else None
+
+    if host in ("youtube.com", "m.youtube.com", "music.youtube.com") or host.endswith(".youtube.com"):
+        qs = parse_qs(parsed.query)
+        if qs.get("v") and qs["v"][0]:
+            return qs["v"][0]
+        if len(parts) >= 2 and parts[0] in ("shorts", "embed", "live"):
+            return parts[1]
+
+    return None
+
+
+def _try_youtube_caption_transcript(video_id: str) -> tuple[str | None, dict]:
+    """
+    Use youtube-transcript-api (undocumented timedtext API; no API key).
+    May fail on datacenter IPs (IpBlocked) — same class of issue as yt-dlp.
+    """
+    if os.environ.get("SKIP_YOUTUBE_CAPTIONS", "").lower() in ("1", "true", "yes"):
+        return None, {}
+    raw = os.environ.get("YOUTUBE_TRANSCRIPT_LANGS", "en,en-US,en-GB").strip()
+    languages = [x.strip() for x in raw.split(",") if x.strip()] or ["en"]
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+
+        api = YouTubeTranscriptApi()
+        fetched = api.fetch(video_id, languages=languages)
+        pieces = [snippet.text for snippet in fetched]
+        text = " ".join(pieces).strip()
+        meta = {
+            "caption_language_code": getattr(fetched, "language_code", None),
+            "caption_language": getattr(fetched, "language", None),
+            "caption_generated": getattr(fetched, "is_generated", None),
+        }
+        return (text or None), meta
+    except Exception as e:
+        return None, {"caption_error": type(e).__name__, "caption_detail": (str(e) or "")[:300]}
+
+
 def _writable_cookies_copy_for_ytdlp(cookies_src: str | None) -> str | None:
     """
     yt-dlp calls save_cookies() on shutdown and opens the cookiejar for writing.
@@ -501,7 +550,9 @@ def transcribe_url_options():
 def transcribe_url():
     """
     JSON body: {"url": "https://www.youtube.com/watch?v=..."}
-    Downloads audio via yt-dlp (first MAX_URL_AUDIO_SECONDS only by default), transcribes.
+
+    For YouTube: tries existing captions/subtitles first (no cookies), then falls back
+    to yt-dlp audio + speech-to-text. Non-YouTube URLs use audio download only.
     """
     work_dir = None
     wav_path = None
@@ -512,10 +563,34 @@ def transcribe_url():
         if not ok:
             return jsonify({"error": "bad_request", "detail": reason}), 400
 
+        video_id = _youtube_video_id_from_url(url) if _is_youtube_url(url) else None
+        cap_meta: dict = {}
+        if video_id:
+            cap_text, cap_meta = _try_youtube_caption_transcript(video_id)
+            if cap_text:
+                out = {
+                    "transcription": cap_text,
+                    "source": "youtube_captions",
+                    "youtube_video_id": video_id,
+                }
+                for k, v in cap_meta.items():
+                    if v is not None:
+                        out[k] = v
+                return jsonify(out), 200
+
         work_dir, media_path = _yt_dlp_download_best_audio(url)
         wav_path = _export_wav_for_google_(media_path, pydub_format=None)
         transcription = speech_to_text(wav_path)
-        return jsonify({"transcription": transcription, "source": "url"}), 200
+        out = {
+            "transcription": transcription,
+            "source": "youtube_audio_stt",
+        }
+        if video_id:
+            out["youtube_video_id"] = video_id
+            err = cap_meta.get("caption_error") if cap_meta else None
+            if err:
+                out["caption_fallback_reason"] = err
+        return jsonify(out), 200
     except Exception as e:
         err = {
             "error": "transcription_failed",
