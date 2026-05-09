@@ -62,14 +62,17 @@ def resolve_audio_format(data: bytes, content_type: str | None) -> tuple[str, st
 
 def read_upload_payload():
     """Raw body or first matching multipart field."""
-    for name in MULTIPART_FIELD_NAMES:
-        if name not in request.files:
-            continue
-        storage = request.files[name]
-        if not storage or not getattr(storage, "filename", None):
-            continue
-        data = storage.read()
-        return data, storage.content_type
+    ctype = (request.content_type or "").split(";")[0].strip().lower()
+    if ctype == "multipart/form-data":
+        for name in MULTIPART_FIELD_NAMES:
+            if name not in request.files:
+                continue
+            storage = request.files[name]
+            if not storage or not getattr(storage, "filename", None):
+                continue
+            data = storage.read()
+            return data, storage.content_type
+        return None, None
     data = request.get_data(cache=False, as_text=False)
     return data, request.content_type
 
@@ -124,6 +127,12 @@ def upload_audio():
     path_wav = None
     try:
         raw, content_type = read_upload_payload()
+        if raw is None and content_type is None:
+            return _json_error(
+                "Multipart request must include a non-empty file in one of: "
+                + ", ".join(MULTIPART_FIELD_NAMES),
+                400,
+            )
         if not raw:
             return _json_error("Empty audio payload", 400)
 
