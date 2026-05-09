@@ -363,12 +363,19 @@ def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
             base_cmd.extend(["--cookies", cookies_writable])
 
         # YouTube EJS / PO-token paths often need a JS runtime (Node ≥20, Deno ≥2, …).
-        # On Render, add the Node buildpack and set YTDLP_JS_RUNTIMES=node — see README.
+        # Docker sets YTDLP_JS_RUNTIMES=node; on hosts where `node` exists we default to it.
         js_runtimes = os.environ.get("YTDLP_JS_RUNTIMES", "").strip()
+        if not js_runtimes and shutil.which("node"):
+            js_runtimes = "node"
         if js_runtimes:
             base_cmd.extend(["--js-runtimes", js_runtimes])
 
-        remote_components = os.environ.get("YTDLP_REMOTE_COMPONENTS", "").strip()
+        # Fetch challenge solver scripts (required for many YouTube formats since ~2025).
+        # https://github.com/yt-dlp/yt-dlp/wiki/EJS
+        if "YTDLP_REMOTE_COMPONENTS" in os.environ:
+            remote_components = os.environ["YTDLP_REMOTE_COMPONENTS"].strip()
+        else:
+            remote_components = "ejs:github" if _is_youtube_url(url) else ""
         if remote_components:
             base_cmd.extend(["--remote-components", remote_components])
 

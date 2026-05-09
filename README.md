@@ -131,7 +131,7 @@ Automated download/transcription of third-party videos may be restricted by **Yo
 | `TRANSCRIBE_URL_EXTRA_HOSTS` | _(empty)_ | Comma-separated extra allowed hostnames (e.g. `vimeo.com`). |
 | `YTDLP_COOKIES_FILE` | _(auto)_ | Path to Netscape **`cookies.txt`**. If unset but **`/etc/secrets/cookies.txt`** exists (Render secret filename), it is used automatically. The server **copies** it to `/tmp` before yt-dlp runs because secret files are **read-only** on Render (yt-dlp must be able to update its cookie jar on disk during the run). |
 | `YTDLP_JS_RUNTIMES` | _(empty)_ | Passed to yt-dlp **`--js-runtimes`** (e.g. **`node`** after installing Node on the host). Needed for full YouTube support with recent yt-dlp; without it you may see **“No supported JavaScript runtime”**. |
-| `YTDLP_REMOTE_COMPONENTS` | _(empty)_ | Optional yt-dlp **`--remote-components`** value (see [EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS)). |
+| `YTDLP_REMOTE_COMPONENTS` | **`ejs:github`** (YouTube only, when env unset) | yt-dlp **`--remote-components`** — downloads JS challenge solvers. Set to empty to disable. Override e.g. `ejs:npm` per [EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS). |
 | `YTDLP_EXTRACTOR_ARGS` | _(empty)_ | Override **`--extractor-args`** for yt-dlp (advanced). |
 
 ### Render (free Web Service)
