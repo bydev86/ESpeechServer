@@ -1,7 +1,11 @@
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import traceback
+from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request
 from pydub import AudioSegment
@@ -248,18 +252,182 @@ def _export_wav_for_google_(src_path, pydub_format=None):
         ) from ff_err
 
 
-def speech_to_text(wav_path):
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_path) as source:
-        audio_data = recognizer.record(source)
+def _url_host_allowed(hostname: str) -> bool:
+    if not hostname:
+        return False
+    h = hostname.lower().rstrip(".")
+    if os.environ.get("TRANSCRIBE_URL_ANY_HOST", "").lower() in ("1", "true", "yes"):
+        return True
+    if h == "youtu.be":
+        return True
+    if h == "youtube.com" or h.endswith(".youtube.com"):
+        return True
+    extra = os.environ.get("TRANSCRIBE_URL_EXTRA_HOSTS", "")
+    for part in extra.split(","):
+        p = part.strip().lower().rstrip(".")
+        if p and (h == p or h.endswith("." + p)):
+            return True
+    return False
+
+
+def _validate_transcribe_url(url: str) -> tuple[bool, str]:
+    url = (url or "").strip()
+    if not url:
+        return False, "missing url"
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, "only http(s) URLs are allowed"
+    host = parsed.hostname
+    if not host:
+        return False, "invalid URL"
+    if not _url_host_allowed(host):
+        return (
+            False,
+            "host not allowed for URL transcribe (YouTube only by default; "
+            "set TRANSCRIBE_URL_EXTRA_HOSTS or TRANSCRIBE_URL_ANY_HOST=true with care)",
+        )
+    return True, ""
+
+
+def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
+    """
+    Download best audio with yt-dlp into a fresh temp directory.
+    Returns (work_dir, media_path).
+    """
+    max_sec = int(os.environ.get("MAX_URL_AUDIO_SECONDS", "300"))
+    max_mb = int(os.environ.get("MAX_URL_DOWNLOAD_MB", "120"))
+
+    work_dir = tempfile.mkdtemp(prefix="ytdl_")
+    out_tmpl = os.path.join(work_dir, "src.%(ext)s")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--no-playlist",
+        "-f",
+        "bestaudio/best",
+        "--max-filesize",
+        f"{max_mb}M",
+        "-o",
+        out_tmpl,
+    ]
+    if max_sec > 0:
+        cmd.extend(["--download-sections", f"*0-{max_sec}"])
+    cmd.append(url)
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        msg = (proc.stderr or proc.stdout or "yt-dlp failed").strip()
+        raise RuntimeError(msg[:8000])
+
+    files = [
+        os.path.join(work_dir, f)
+        for f in os.listdir(work_dir)
+        if os.path.isfile(os.path.join(work_dir, f))
+    ]
+    if not files:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise RuntimeError("yt-dlp produced no file")
+
+    media_path = max(files, key=os.path.getmtime)
+    return work_dir, media_path
+
+
+def _recognize_google_safe(recognizer, audio_data):
     try:
         text = recognizer.recognize_google(audio_data)
-        print(f"Transcription: {text}")
+        print(f"Transcription chunk: {text[:120]!r}...")
         return text
     except sr.UnknownValueError:
-        return "Google Speech Recognition could not understand audio"
+        return ""
     except sr.RequestError as e:
-        return f"Could not request results from Google Speech Recognition service; {e}"
+        return f"[Google SR error: {e}]"
+
+
+def speech_to_text(wav_path):
+    """
+    Google SpeechRecognition has practical limits on clip length; long WAVs are chunked.
+    """
+    recognizer = sr.Recognizer()
+    chunk_ms = int(os.environ.get("SR_CHUNK_MS", "45000"))
+    max_single_ms = int(os.environ.get("SR_MAX_SINGLE_MS", "55000"))
+    chunk_sleep = float(os.environ.get("SR_CHUNK_SLEEP_SEC", "0.25"))
+
+    seg = AudioSegment.from_file(wav_path, format="wav")
+    total_ms = len(seg)
+
+    if total_ms <= max_single_ms:
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+        text = _recognize_google_safe(recognizer, audio_data)
+        return text or "Google Speech Recognition could not understand audio"
+
+    parts = []
+    for start in range(0, total_ms, chunk_ms):
+        chunk = seg[start : start + chunk_ms]
+        fd, tmp = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            chunk.export(tmp, format="wav")
+            with sr.AudioFile(tmp) as source:
+                audio_data = recognizer.record(source)
+            piece = _recognize_google_safe(recognizer, audio_data)
+            if piece:
+                parts.append(piece)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        if chunk_sleep > 0:
+            time.sleep(chunk_sleep)
+
+    joined = " ".join(parts).strip()
+    return joined or "Google Speech Recognition could not understand audio"
+
+
+@app.route("/transcribeUrl", methods=["OPTIONS"])
+def transcribe_url_options():
+    return "", 204
+
+
+@app.route("/transcribeUrl", methods=["POST"])
+def transcribe_url():
+    """
+    JSON body: {"url": "https://www.youtube.com/watch?v=..."}
+    Downloads audio via yt-dlp (first MAX_URL_AUDIO_SECONDS only by default), transcribes.
+    """
+    work_dir = None
+    wav_path = None
+    try:
+        body = request.get_json(silent=True) or {}
+        url = body.get("url") or body.get("video_url") or ""
+        ok, reason = _validate_transcribe_url(url)
+        if not ok:
+            return jsonify({"error": "bad_request", "detail": reason}), 400
+
+        work_dir, media_path = _yt_dlp_download_best_audio(url)
+        wav_path = _export_wav_for_google_(media_path, pydub_format=None)
+        transcription = speech_to_text(wav_path)
+        return jsonify({"transcription": transcription, "source": "url"}), 200
+    except Exception as e:
+        err = {
+            "error": "transcription_failed",
+            "detail": str(e),
+            "trace": traceback.format_exc() if app.debug else None,
+        }
+        return jsonify(err), 500
+    finally:
+        if wav_path:
+            try:
+                if os.path.exists(wav_path):
+                    os.remove(wav_path)
+            except OSError:
+                pass
+        if work_dir:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @app.route("/uploadAudio", methods=["POST"])
