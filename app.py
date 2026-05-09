@@ -556,6 +556,8 @@ def transcribe_url():
     """
     work_dir = None
     wav_path = None
+    video_id = None
+    cap_meta: dict = {}
     try:
         body = request.get_json(silent=True) or {}
         url = body.get("url") or body.get("video_url") or ""
@@ -564,7 +566,6 @@ def transcribe_url():
             return jsonify({"error": "bad_request", "detail": reason}), 400
 
         video_id = _youtube_video_id_from_url(url) if _is_youtube_url(url) else None
-        cap_meta: dict = {}
         if video_id:
             cap_text, cap_meta = _try_youtube_caption_transcript(video_id)
             if cap_text:
@@ -597,6 +598,18 @@ def transcribe_url():
             "detail": str(e),
             "trace": traceback.format_exc() if app.debug else None,
         }
+        if video_id:
+            err["youtube_video_id"] = video_id
+        if cap_meta:
+            err["caption_attempt"] = {
+                k: cap_meta[k]
+                for k in ("caption_error", "caption_detail")
+                if k in cap_meta and cap_meta[k]
+            }
+        err["hint"] = (
+            "Captions may have failed from a datacenter IP; yt-dlp then hit a bot check. "
+            "Refresh Render cookies.txt if using STT fallback, or upload audio via POST /uploadAudio from the user browser."
+        )
         return jsonify(err), 500
     finally:
         if wav_path:
