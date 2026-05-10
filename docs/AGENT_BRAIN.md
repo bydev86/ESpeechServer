@@ -12,11 +12,14 @@
 
 | Item | Value |
 |------|--------|
-| **Name** | ESpeechServer |
+| **Repo / canonical name** | **ESpeechServer** (`bydev86/ESpeechServer`) — **one codebase** for all consumers |
 | **Purpose** | HTTP API: audio/video → normalized WAV → **Google Speech Recognition** text; optional **YouTube URL** → captions **or** download + STT |
 | **Stack** | Flask, pydub, ffmpeg (CLI), SpeechRecognition, yt-dlp, youtube-transcript-api, gunicorn |
-| **Production example** | `https://yespeechserver.onrender.com` (Render; name may vary per deploy) |
+| **Deploy naming (examples)** | Operators often run **two Render services** from the **same Git revision**, e.g. **YesSpeech** (Liberation Lab — URL + upload) vs **ESpeech / Nori** (live speech — upload only). Different URLs and **environment variables**, not different application source trees. |
+| **Production example** | `https://yespeechserver.onrender.com` (may vary per deploy) |
 | **Upstream repo (reference)** | `bydev86/ESpeechServer` — treat as canonical implementation |
+
+**Guarantee for “works everywhere we deploy this repo”:** Every deploy exposes the **same routes** (`GET /`, `POST /uploadAudio`, `POST /transcribeUrl`). Products that only need live audio simply **call `/uploadAudio`** and ignore URL transcription. Products that need YouTube use **`/transcribeUrl`** plus fallback **`/uploadAudio`**. Behavior differences come from **env** (e.g. skip yt-dlp) and **client UX**, not from maintaining two implementations.
 
 ---
 
@@ -49,6 +52,25 @@ Client
 ```
 
 **Important:** YouTube **caption** fetch and **yt-dlp** both run **from the server IP**. Datacenter IPs can see **`IpBlocked`** / bot challenges — **browser → `/uploadAudio`** remains the most reliable path for stubborn videos.
+
+### 3.1 Recommended deployment profiles (same `app.py`)
+
+| Profile | Typical host name | Primary endpoints | Docker | Suggested env notes |
+|---------|-------------------|-------------------|--------|---------------------|
+| **Nori — live speech** | e.g. `espeechserver…` | **`POST /uploadAudio` only** (WebM/WAV/m4a from mic/MediaRecorder) | Optional if the Nori client never calls `/transcribeUrl`; **ffmpeg** still required on the host for WebM/Opus transcoding | Caption / yt-dlp env vars unused if UI never hits `/transcribeUrl`. Keep **`gunicorn --timeout`** ≥ **120** for cold start + decode + SR. |
+| **Liberation Lab / YesSpeech — study + video** | e.g. `yespeechserver…` | **`/transcribeUrl`** + **`/uploadAudio`** fallback | **Recommended** (Node + ffmpeg for yt-dlp EJS) | **`SKIP_YTDLP_FALLBACK=true`** for anonymous visitors; **`YTDLP_BLOCK_AS_CLIENT_UPLOAD`** default **`true`** so bot walls return **422**. |
+
+Both profiles ship the **same routes**; differences are **URL + env + which buttons the client shows**. Avoid maintaining divergent Git forks unless unavoidable.
+
+### 3.2 End-user cookies, embeds, and “use the visitor’s YouTube login”
+
+| Idea | Reality |
+|------|--------|
+| **Pipe each visitor’s cookies dynamically into yt-dlp** | **Not a viable consumer feature.** Exporting **`cookies.txt`** to a third-party API is a **session-handoff / account takeover risk**, creates **privacy & consent** obligations, and conflicts with **YouTube ToS** interpretations for automation. |
+| **Read `youtube.com` cookies from JavaScript** | **Typically impossible** for auth cookies: they are **`HttpOnly`**, so browser JS on your WordPress origin **cannot** read them to forward to your API. |
+| **Optional API to POST a cookie jar per request** | Could be implemented in Flask but **must not** be enabled for anonymous WordPress users; at most **trusted admin** tooling with explicit warnings. |
+| **YouTube iframe / embed exposes cookies to your server** | **No.** The embed is **cross-origin**; parent-page scripts **cannot** inspect iframe cookies or network credentials. Your Render worker never receives the viewer’s logged-in YouTube session from an embed. |
+| **What works** | **`youtube-transcript-api`** from the server when not blocked; otherwise **bytes from the user’s device** → **`/uploadAudio`**. |
 
 ---
 
@@ -128,11 +150,18 @@ Client
 
 ---
 
-## 8. WordPress / Liberation Lab
+## 8. Product integrations
+
+### 8.1 Liberation Lab (WordPress / YesSpeech-style)
 
 - **Product page (context):** `https://theliberationlab.com/study-guide-quick-teaser/`
 - **Integration spec:** `docs/WORDPRESS_PLUGIN_AGENT_BRIEF.md`
-- **Strategy:** URL convenience (`/transcribeUrl`) + **mandatory fallback** to `/uploadAudio` from browser; **localStorage** cache by `youtube_video_id`.
+- **Strategy:** **`/transcribeUrl`** when captions exist; **mandatory fallback** to **`/uploadAudio`** on **422** / failures; cache transcripts in **IndexedDB** (large text), tiny prefs / index in **localStorage** only.
+
+### 8.2 Nori (live speech only)
+
+- **Contract:** See **`README.md`** — “Nori / browser client contract”: raw **POST** or **multipart** `audio`, correct **`Content-Type`**, timeout **≥ 60 s** (free tier cold start).
+- **Server:** Same container as Lab; no requirement to expose `/transcribeUrl` in the Nori UI.
 
 ---
 
@@ -152,6 +181,11 @@ Client
 *Instructions for future agents/humans: append a new dated block below when behavior, URLs, or product decisions change. Keep entries short.*
 
 ```
+### 2026-05-09 — agent (Cursor)
+- Change: Documented dual-deploy model (YesSpeech vs Nori), cookies/embed limitations, maintained AGENT_BRAIN as canonical handoff doc.
+- Verified: N/A (documentation).
+- Open issues: Confirm merged branch for yt-dlp→422 mapping is deployed on Lab instance; Nori instance can omit Node only if clients never need `/transcribeUrl`.
+
 ### YYYY-MM-DD — <author / agent id>
 - Change:
 - Verified:
@@ -175,4 +209,11 @@ Client
 
 ---
 
-**End of agent brain.** Update §10 when reality drifts; keep §2–§7 aligned with `README.md` when changing the service.
+## 12. Maintainer checklist (before merging STT/URL changes)
+
+- [ ] `README.md` env table matches §5  
+- [ ] `docs/WORDPRESS_PLUGIN_AGENT_BRIEF.md` matches §4 URL/upload + 422 behavior  
+- [ ] Append dated line to §10  
+- [ ] Confirm Nori README contract still accurate if timeouts or routes change  
+
+**End of agent brain.** **Maintenance rule:** any functional change to `app.py`, env vars, or integration contracts MUST update **§2, §4–§7** (and §10 log). This file is the **single pasteable context** for agents that cannot see private sibling repos (WordPress, Nori).
