@@ -78,6 +78,7 @@ Client
   - **`youtube_captions`** — text from existing YouTube subtitles/captions (fast path).
   - **`youtube_audio_stt`** — captions unavailable or failed; audio downloaded + STT. May include `youtube_video_id`, `caption_fallback_reason` (short error class).
 - **Timeouts:** clients should allow **≥ 120s**, preferably **900s** (cold start + yt-dlp + SR).
+- **422 `client_upload_required`:** Returned when the server intentionally skips or cannot complete YouTube download (`SKIP_YTDLP_FALLBACK`, or yt-dlp bot-block when **`YTDLP_BLOCK_AS_CLIENT_UPLOAD`** is enabled). Body includes **`next_step: upload_audio`**; proxies must not rewrite this to 502.
 
 ### 4.5 Host allowlist (URL mode)
 
@@ -96,6 +97,7 @@ Client
 | `SR_CHUNK_MS` / `SR_MAX_SINGLE_MS` / `SR_CHUNK_SLEEP_SEC` | Long-audio SR chunking. |
 | `SKIP_YOUTUBE_CAPTIONS` | Skip caption API; go straight to yt-dlp. |
 | `SKIP_YTDLP_FALLBACK` | If `true`: YouTube URLs **never** call yt-dlp after captions fail — **422** instructs client **`upload_audio`**. |
+| `YTDLP_BLOCK_AS_CLIENT_UPLOAD` | Default **`true`**: bot-wall yt-dlp failures on YouTube → **422** `client_upload_required` instead of **500**. |
 | `YOUTUBE_TRANSCRIPT_LANGS` | Caption language preference list. |
 | `YTDLP_COOKIES_FILE` | Optional; auto `/etc/secrets/cookies.txt` on Render if present. |
 | `YTDLP_JS_RUNTIMES` | e.g. `node` — auto if `node` on PATH. |

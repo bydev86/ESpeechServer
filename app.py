@@ -364,6 +364,58 @@ def _writable_cookies_copy_for_ytdlp(cookies_src: str | None) -> str | None:
     return tmp
 
 
+def _ytdlp_stderr_suggests_datacenter_block(msg: str) -> bool:
+    """Heuristic: yt-dlp failed due to YouTube bot / datacenter walls (not generic decode errors)."""
+    m = (msg or "").lower()
+    if not m:
+        return False
+    needles = (
+        "sign in to confirm",
+        "not a bot",
+        "login required",
+        "http error 403",
+        "http error 429",
+        "bot check",
+        "ipblocked",
+        "po token",
+        "unable to download api page",
+        "only images are available",
+        "requested format is not available",
+        "signature solving failed",
+        "no supported javascript runtime",
+    )
+    return any(n in m for n in needles)
+
+
+def _json_client_upload_required(
+    video_id: str | None,
+    cap_meta: dict | None,
+    *,
+    message: str,
+    extra: dict | None = None,
+):
+    body: dict = {
+        "error": "client_upload_required",
+        "next_step": "upload_audio",
+        "message": message,
+    }
+    if video_id:
+        body["youtube_video_id"] = video_id
+    if cap_meta:
+        ca = {
+            k: cap_meta[k]
+            for k in ("caption_error", "caption_detail")
+            if k in cap_meta and cap_meta[k]
+        }
+        if ca:
+            body["caption_attempt"] = ca
+    if extra:
+        for k, v in extra.items():
+            if v is not None:
+                body[k] = v
+    return body
+
+
 def _yt_dlp_download_best_audio(url: str) -> tuple[str, str]:
     """
     Download best audio with yt-dlp into a fresh temp directory.
@@ -586,24 +638,49 @@ def transcribe_url():
             and os.environ.get("SKIP_YTDLP_FALLBACK", "").lower() in ("1", "true", "yes")
         ):
             return jsonify(
-                {
-                    "error": "client_upload_required",
-                    "youtube_video_id": video_id,
-                    "caption_attempt": {
-                        k: cap_meta[k]
-                        for k in ("caption_error", "caption_detail")
-                        if k in cap_meta and cap_meta[k]
-                    },
-                    "message": (
+                _json_client_upload_required(
+                    video_id,
+                    cap_meta,
+                    message=(
                         "This server cannot download YouTube audio without captions. "
                         "Use POST /uploadAudio with audio or video from the viewer's device "
                         "(file pick, screen/tab recording, or exported clip)."
                     ),
-                    "next_step": "upload_audio",
-                }
+                    extra={"reason": "skip_ytdlp_fallback"},
+                )
             ), 422
 
-        work_dir, media_path = _yt_dlp_download_best_audio(url)
+        try:
+            work_dir, media_path = _yt_dlp_download_best_audio(url)
+        except RuntimeError as e:
+            ymsg = str(e)
+            block_as_upload = os.environ.get("YTDLP_BLOCK_AS_CLIENT_UPLOAD", "true").lower() not in (
+                "0",
+                "false",
+                "no",
+            )
+            if (
+                block_as_upload
+                and video_id
+                and _is_youtube_url(url)
+                and _ytdlp_stderr_suggests_datacenter_block(ymsg)
+            ):
+                return jsonify(
+                    _json_client_upload_required(
+                        video_id,
+                        cap_meta,
+                        message=(
+                            "YouTube blocked automated download from our server (bot check). "
+                            "Use a video with captions if available, or upload audio/video from your device "
+                            "(file pick or browser tab/audio capture)."
+                        ),
+                        extra={
+                            "reason": "youtube_ytdlp_blocked",
+                            "ytdlp_detail": ymsg[:900],
+                        },
+                    )
+                ), 422
+            raise
         wav_path = _export_wav_for_google_(media_path, pydub_format=None)
         transcription = speech_to_text(wav_path)
         out = {
