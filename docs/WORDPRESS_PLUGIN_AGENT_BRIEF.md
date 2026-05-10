@@ -116,6 +116,24 @@ Alternate key: `"video_url"` (same value).
 
 `caption_fallback_reason` is **optional**; when present it is a **short** exception type name (e.g. `IpBlocked`, `NoTranscriptFound`), not a full stack trace.
 
+**422 — pivot to browser upload (no more cookie treadmill):**
+
+When captions are missing **and** the server refuses or cannot complete yt-dlp (e.g. **`SKIP_YTDLP_FALLBACK=true`**) **or** yt-dlp hits a **YouTube bot wall** (with **`YTDLP_BLOCK_AS_CLIENT_UPLOAD`** left at default), the API returns **422** with a stable shape:
+
+```json
+{
+  "error": "client_upload_required",
+  "next_step": "upload_audio",
+  "message": "…user-facing…",
+  "youtube_video_id": "VIDEO_ID",
+  "caption_attempt": { "caption_error": "…", "caption_detail": "…" },
+  "reason": "skip_ytdlp_fallback | youtube_ytdlp_blocked",
+  "ytdlp_detail": "…optional stderr excerpt…"
+}
+```
+
+The WordPress proxy must **forward HTTP 422** (not map it to 502/500) so the UI can open **upload / tab capture** immediately.
+
 **Client timeouts:**
 
 - Cold start + work: use **`fetch` timeout ≥ 120s**; **≥ 900s** is safer for URL mode that falls through to download + STT.
@@ -187,6 +205,7 @@ YouTube ToS and copyright apply. The plugin should **not** encourage piracy; res
 - [ ] Same UI offers **fallback** path using **`/uploadAudio`** (file or recorded blob) when URL path fails or times out.  
 - [ ] **localStorage** cache prevents duplicate API calls for same video ID.  
 - [ ] Handles **cold start** (long wait, no silent hang).  
+- [ ] **`422` `client_upload_required`** from ESpeechServer is passed through as **422** (not remapped to 502/500); UI switches to upload/tab capture.  
 - [ ] Handles **413** with user-facing guidance (file too large).  
 - [ ] **`Content-Type` / multipart** documented in inline comments so future edits don’t regress.
 
